@@ -26,6 +26,7 @@
 #include "inums.h"
 
 extern int module_id;
+extern int do_fsync;
 extern int modify_window;
 extern int relative_paths;
 extern int preserve_times;
@@ -407,6 +408,13 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
 		rsyserr(FERROR_XFER, errno, "ftruncate %s", full_fname(dest));
 	}
 #endif
+
+	if (do_fsync && fsync(ofd) < 0) {
+		rsyserr(FERROR, errno, "fsync failed on %s",
+			full_fname(dest));
+		close(ofd);
+		return -1;
+	}
 
 	if (close(ofd) < 0) {
 		int save_errno = errno;
