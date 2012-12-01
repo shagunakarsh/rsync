@@ -33,6 +33,8 @@
 #include <sys/syscall.h>
 #endif
 
+#include <libgen.h>
+
 extern int dry_run;
 extern int am_root;
 extern int am_sender;
@@ -40,6 +42,7 @@ extern int read_only;
 extern int list_only;
 extern int preserve_perms;
 extern int preserve_executability;
+extern int do_fsync;
 
 #define RETURN_ERROR_IF(x,e) \
 	do { \
@@ -51,11 +54,34 @@ extern int preserve_executability;
 
 #define RETURN_ERROR_IF_RO_OR_LO RETURN_ERROR_IF(read_only || list_only, EROFS)
 
+#define FSYNC_DIRNAME(fname) \
+	do { \
+		const char *dir; \
+		int fd; \
+		int e; \
+		if ((dir = dirname(fname)) && (fd = open(dir, 0)) >= 0) { \
+			if (fsync(fd)) { \
+				e = errno; \
+				close(fd); \
+				errno = e; \
+				return -1; \
+			} \
+			if (close(fd)) \
+				return -1; \
+		} else { \
+			return -1; \
+		} \
+	} while(0)
+
 int do_unlink(const char *fname)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
-	return unlink(fname);
+	if (unlink(fname))
+		return -1;
+	if (do_fsync)
+		FSYNC_DIRNAME(fname);
+	return 0;
 }
 
 #ifdef SUPPORT_LINKS
@@ -79,7 +105,11 @@ int do_symlink(const char *lnk, const char *fname)
 	}
 #endif
 
-	return symlink(lnk, fname);
+	if (symlink(lnk, fname))
+		return -1;
+	if (do_fsync)
+		FSYNC_DIRNAME(lnk);
+	return 0;
 }
 
 #if defined NO_SYMLINK_XATTRS || defined NO_SYMLINK_USER_XATTRS
@@ -112,7 +142,11 @@ int do_link(const char *fname1, const char *fname2)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
-	return link(fname1, fname2);
+	if (link(fname1, fname2))
+		return -1;
+	if (do_fsync)
+		FSYNC_DIRNAME(fname2);
+	return 0;
 }
 #endif
 
@@ -123,7 +157,11 @@ int do_lchown(const char *path, uid_t owner, gid_t group)
 #ifndef HAVE_LCHOWN
 #define lchown chown
 #endif
-	return lchown(path, owner, group);
+	if (lchown(path, owner, group))
+		return -1;
+	if (do_fsync)
+		FSYNC_DIRNAME(path);
+	return 0;
 }
 
 int do_mknod(const char *pathname, mode_t mode, dev_t dev)
@@ -140,8 +178,13 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
 	}
 
 #if !defined MKNOD_CREATES_FIFOS && defined HAVE_MKFIFO
-	if (S_ISFIFO(mode))
-		return mkfifo(pathname, mode);
+	if (S_ISFIFO(mode)) {
+		if (mkfifo(pathname, mode))
+			return -1;
+		if (do_fsync)
+			FSYNC_DIRNAME(pathname);
+		return 0;
+	}
 #endif
 #if !defined MKNOD_CREATES_SOCKETS && defined HAVE_SYS_UN_H
 	if (S_ISSOCK(mode)) {
@@ -170,7 +213,11 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
 	}
 #endif
 #ifdef HAVE_MKNOD
-	return mknod(pathname, mode, dev);
+	if (mknod(pathname, mode, dev))
+		return -1;
+	if (do_fsync)
+		FSYNC_DIRNAME(pathname);
+	return 0;
 #else
 	return -1;
 #endif
@@ -180,7 +227,11 @@ int do_rmdir(const char *pathname)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
-	return rmdir(pathname);
+	if (rmdir(pathname))
+		return -1;
+	if (do_fsync)
+		FSYNC_DIRNAME(pathname);
+	return 0;
 }
 
 int do_open(const char *pathname, int flags, mode_t mode)
@@ -227,7 +278,13 @@ int do_rename(const char *fname1, const char *fname2)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
-	return rename(fname1, fname2);
+	if (rename(fname1, fname2))
+		return -1;
+	if (do_fsync) {
+		FSYNC_DIRNAME(fname1);
+		FSYNC_DIRNAME(fname2);
+	}
+	return 0;
 }
 
 #ifdef HAVE_FTRUNCATE
@@ -269,7 +326,11 @@ int do_mkdir(char *fname, mode_t mode)
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
 	trim_trailing_slashes(fname);
-	return mkdir(fname, mode);
+	if (mkdir(fname, mode))
+		return -1;
+	if (do_fsync)
+		FSYNC_DIRNAME(fname);
+	return 0;
 }
 
 /* like mkstemp but forces permissions */
